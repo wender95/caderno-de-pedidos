@@ -1,0 +1,20 @@
+rules_version = '2';
+
+// Só os e-mails desta lista leem e gravam os dados.
+// Para liberar alguém: crie o usuário em Authentication > Users e acrescente o e-mail aqui (em minúsculas).
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function liberado() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email.lower() in [
+          'ana@teste.com',
+          'bia@teste.com'
+        ];
+    }
+
+    match /{documento=**} {
+      allow read, write: if liberado();
+    }
+  }
+}

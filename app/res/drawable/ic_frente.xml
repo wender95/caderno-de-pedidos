@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Prancheta com linhas de pedido -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFF8F2"
+        android:pathData="M39,32h30a4,4 0 0 1 4,4v40a4,4 0 0 1 -4,4h-30a4,4 0 0 1 -4,-4v-40a4,4 0 0 1 4,-4z" />
+    <path android:fillColor="#E8C9AE"
+        android:pathData="M46,28h16a2,2 0 0 1 2,2v6h-20v-6a2,2 0 0 1 2,-2z" />
+    <path android:fillColor="#6B3E26"
+        android:pathData="M42,46h4v4h-4zM50,46h16v4h-16zM42,56h4v4h-4zM50,56h16v4h-16zM42,66h4v4h-4zM50,66h10v4h-10z" />
+</vector>

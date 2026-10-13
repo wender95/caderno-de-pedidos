@@ -1,0 +1,17 @@
+# Chave de assinatura: nunca vai para o repositório
+pedidos.keystore
+keystore.txt
+
+# Saídas do build
+build/
+*.apk
+*.idsig
+entrega/
+
+# Configuração do Firebase e regras com os e-mails reais (veja os arquivos .exemplo)
+app/assets/firebase-config.js
+firebase/firestore.rules
+
+# Ferramentas de teste
+tools/node_modules/
+tools/*.log
