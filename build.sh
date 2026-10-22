@@ -2,8 +2,8 @@
 # Gera o APK sem Gradle: aapt2 (recursos) -> javac -> d8 (dex) -> zipalign -> apksigner.
 # Uso: ./build.sh   (aumente VERSAO_CODIGO a cada nova versão para instalar por cima)
 set -euo pipefail
-VERSAO_CODIGO=8
-VERSAO_NOME="2.3"
+VERSAO_CODIGO=9
+VERSAO_NOME="2.4"
 
 cd "$(dirname "$0")"
 SDK="${ANDROID_HOME:-/c/Users/Wender/Android/sdk}"

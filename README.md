@@ -27,8 +27,8 @@ vendendo, uma não sabia o que a outra já tinha vendido.
 | :--- | :--- |
 | **Lançar em três toques** | Vitrine de doces com foto (4 por linha), toque para pôr na cestinha, escolher o cliente, confirmar. O estoque baixa na hora. |
 | **Estoque que não se perde** | Entrada de mercadoria com custo por unidade, ajuste por contagem, quebra ou consumo, histórico das movimentações e aviso de produto acabando. |
-| **Cobrança no fim do mês** | O relatório agrupa os pedidos por cliente e mostra quanto falta, e a cobrança sai pronta pelo WhatsApp. Aceita **pagamento parcial**, que é distribuído pelos pedidos em aberto do mais antigo para o mais novo, e o pagamento pode ser desfeito. |
-| **Relatório por dia, mês ou ano** | Receita (só o que já foi pago), despesas (custo do que foi vendido), vendido, a receber, lucro e os itens que mais saem. |
+| **Cobrança no fim do mês** | Por cliente, três visões: **Total** (o que comprou no período), **Quitado** (o que pagou no período) e **Em aberto** (o que deve). Dívida que passa de um mês para o outro continua em aberto, separada por mês e marcada como "mês anterior". A cobrança sai pronta pelo WhatsApp. Aceita **pagamento parcial**, distribuído do pedido mais antigo para o mais novo, e o pagamento pode ser desfeito. |
+| **Relatório por dia, mês ou ano** | Receita (o que foi recebido no período, pela data do pagamento), despesas (custo do que foi vendido), vendido, a receber (incluindo o que ficou de antes), lucro e os itens que mais saem. |
 | **Vários celulares, um estoque** | Login por e-mail e senha. Os dados ficam no Firestore e aparecem nos outros celulares em tempo real. |
 | **Funciona sem internet** | Os lançamentos são gravados no cache offline do Firestore e sobem quando a conexão volta. |
 | **Backup** | Exporta tudo em JSON para a pasta Downloads e importa de volta, inclusive o formato da versão anterior, que guardava os dados só no celular. |

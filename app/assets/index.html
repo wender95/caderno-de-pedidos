@@ -128,6 +128,9 @@ details.cli summary .n{flex:1;font-weight:600}
 .lines .ln{display:flex;justify-content:space-between;gap:10px;font-size:14px}
 .lines .ln.pg{align-items:center}
 .lines .ln.pg b{color:var(--ok)}
+.lines .ln.mes{justify-content:flex-start;align-items:center;gap:8px;padding-top:6px;border-top:1px dashed var(--line);color:var(--ink)}
+.lines .ln.mes:first-child{border-top:0;padding-top:0}
+#visaoSeg{margin-top:-4px}
 .lines .ln span:first-child{color:var(--muted)}
 .actions{display:flex;gap:8px;flex-wrap:wrap;padding-top:4px}
 .rank{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:center}
@@ -265,7 +268,12 @@ details.cli summary .n{flex:1;font-weight:600}
     </div>
     <div class="panel">
       <h2>Por cliente</h2>
-      <span class="hint">Marque como pago quando receber. Só o que está pago entra na receita.</span>
+      <div class="seg" id="visaoSeg">
+        <button type="button" data-v="total" aria-pressed="false">Total</button>
+        <button type="button" data-v="quitado" aria-pressed="false">Quitado</button>
+        <button type="button" data-v="aberto" aria-pressed="true">Em aberto</button>
+      </div>
+      <span class="hint" id="visaoDica"></span>
       <div id="rClientes"></div>
     </div>
     <div class="panel">
@@ -440,9 +448,10 @@ const App = window.Android; // ponte com o app Android; ausente quando aberto no
    O estoque muda sempre por incremento no próprio banco, então vendas em celulares
    diferentes ao mesmo tempo somam certo. Sem internet, o Firestore guarda as gravações
    e envia quando a conexão volta; por isso as gravações não são aguardadas. */
-const D = {produtos:[], clientes:[], entradas:[], pedidos:[]};
+const D = {produtos:[], clientes:[], entradas:[], pedidos:[], abertos:[], pagosPeriodo:[]};
 let db=null, auth=null, usuario=null, inc=null;
-let assinaturas=[], assinaturaPedidos=null, pedidosCarregados=false;
+let assinaturas=[], assinaturasPedidos=[], pedidosCarregados=false;
+let carregou = {periodo:false, pagos:false, abertos:false};
 
 const produto = id => D.produtos.find(p=>p.id===id);
 const cliente = id => D.clientes.find(c=>c.id===id);
@@ -506,35 +515,68 @@ function iniciarFirebase(){
     usuario=u;
     $("#login").hidden=!!u;
     pararAssinaturas();
-    if(u){ $("#contaInfo").textContent=`Conectado como ${u.email}. Saia só se for entregar o celular para outra pessoa.`; assinar(); }
-    else { Object.assign(D,{produtos:[],clientes:[],entradas:[],pedidos:[]}); cesta={}; clienteSel=null; renderTudo(); }
+    if(u){ $("#contaInfo").textContent=`Conectado como ${u.email}. Saia só se for entregar o celular para outra pessoa.`; assinar(); migrarPagamentos(); }
+    else { Object.assign(D,{produtos:[],clientes:[],entradas:[],pedidos:[],abertos:[],pagosPeriodo:[]}); cesta={}; clienteSel=null; renderTudo(); }
   });
 }
 function erroLeitura(e){
   console.error(e);
   if(e.code==="permission-denied") toast("Este e-mail não está liberado para ver os dados.");
 }
+function pararPedidos(){ assinaturasPedidos.forEach(f=>f()); assinaturasPedidos=[]; }
 function pararAssinaturas(){
   assinaturas.forEach(f=>f()); assinaturas=[];
-  if(assinaturaPedidos){ assinaturaPedidos(); assinaturaPedidos=null; }
+  pararPedidos();
+  carregou = {periodo:false, pagos:false, abertos:false}; pedidosCarregados=false;
 }
 const docs = s => s.docs.map(d=>({id:d.id, ...d.data()}));
+function relatorioPronto(){
+  pedidosCarregados = carregou.periodo && carregou.pagos && carregou.abertos;
+  renderRelatorio();
+}
 function assinar(){
   assinaturas.push(db.collection("produtos").onSnapshot(s=>{ D.produtos=docs(s); renderTudo(); checarMigracao(s); }, erroLeitura));
   assinaturas.push(db.collection("clientes").onSnapshot(s=>{ D.clientes=docs(s); renderTudo(); }, erroLeitura));
   assinaturas.push(db.collection("entradas").orderBy("ts","desc").limit(20).onSnapshot(s=>{ D.entradas=docs(s); renderEstoque(); }, erroLeitura));
+  // Tudo o que ainda não foi quitado, de qualquer mês: é o que aparece em "Em aberto" e é cobrado
+  assinaturas.push(db.collection("pedidos").where("pago","==",false).onSnapshot(s=>{ D.abertos=docs(s); carregou.abertos=true; relatorioPronto(); }, erroLeitura));
   assinarPedidos();
 }
-/* Só os pedidos do período escolhido no relatório são lidos (economiza a cota grátis) */
+/* Do período escolhido no relatório, lê só: os pedidos feitos nele e os pedidos que receberam pagamento nele
+   (pagamentos de dívidas antigas também contam no mês em que foram pagos) */
 function assinarPedidos(){
   if(!db || !usuario) return;
-  if(assinaturaPedidos) assinaturaPedidos();
-  pedidosCarregados=false; renderRelatorio();
-  const col=db.collection("pedidos");
-  const q = periodo==="dia" ? col.where("dia","==",$("#rDia").value)
-    : periodo==="mes" ? col.where("mes","==",$("#rMes").value)
-    : col.where("ano","==",parseInt($("#rAno").value)||new Date().getFullYear());
-  assinaturaPedidos = q.onSnapshot(s=>{ D.pedidos=docs(s); pedidosCarregados=true; renderRelatorio(); }, erroLeitura);
+  pararPedidos();
+  carregou.periodo=false; carregou.pagos=false; relatorioPronto();
+  const col=db.collection("pedidos"), ano=parseInt($("#rAno").value)||new Date().getFullYear();
+  const [qPedidos, qPagos] =
+      periodo==="dia" ? [col.where("dia","==",$("#rDia").value), col.where("pagtoDias","array-contains",$("#rDia").value)]
+    : periodo==="mes" ? [col.where("mes","==",$("#rMes").value), col.where("pagtoMeses","array-contains",$("#rMes").value)]
+    : [col.where("ano","==",ano), col.where("pagtoAnos","array-contains",ano)];
+  assinaturasPedidos = [
+    qPedidos.onSnapshot(s=>{ D.pedidos=docs(s); carregou.periodo=true; relatorioPronto(); }, erroLeitura),
+    qPagos.onSnapshot(s=>{ D.pagosPeriodo=docs(s); carregou.pagos=true; relatorioPronto(); }, erroLeitura),
+  ];
+}
+/* Uma vez só: pagamentos lançados antes da 2.4 ganham as marcas de data usadas na busca acima */
+async function migrarPagamentos(){
+  try{
+    const cfg=db.doc("config/dados");
+    const c=await cfg.get({source:"server"});
+    if(c.exists && c.data().pagamentosV2) return;
+    const [a,b]=await Promise.all([
+      db.collection("pedidos").where("pago","==",true).get({source:"server"}),
+      db.collection("pedidos").where("valorPago",">",0).get({source:"server"})]);
+    const mapa=new Map(); [...a.docs,...b.docs].forEach(d=>mapa.set(d.id,{id:d.id,...d.data()}));
+    const ops=[];
+    mapa.forEach(p=>{ if(!p.pagtoMeses) ops.push([p.id, normalizaPagamentos(p)]); });
+    for(let i=0;i<ops.length;i+=400){
+      const bt=db.batch();
+      ops.slice(i,i+400).forEach(([id,mud])=>bt.update(db.doc("pedidos/"+id), mud));
+      await bt.commit();
+    }
+    await cfg.set({pagamentosV2:true},{merge:true});
+  }catch(e){ console.warn("migração de pagamentos (tenta de novo na próxima abertura):", e.code||e); }
 }
 
 function atualizaOnline(){ $("#offline").hidden = navigator.onLine; }
@@ -822,61 +864,104 @@ const soma = (lista,f) => lista.reduce((s,v)=>s+f(v),0);
 const pagoDe = p => Math.min(p.total, p.valorPago ?? (p.pago ? p.total : 0));
 const abertoDe = p => centavos(p.total - pagoDe(p));
 const dataBR = dia => { if(!dia) return ""; const [a,m,d]=dia.split("-"); return `${d}/${m}/${a}`; };
-/* A cobrança lista os pedidos ainda em aberto (ou tudo, se já estiver pago) e mostra o que já foi pago */
-function textoCobranca(nome, pedidos){
-  const abertos = pedidos.filter(p=>abertoDe(p)>0.004), base = abertos.length ? abertos : pedidos;
-  const total = soma(base,p=>p.total), pago = soma(base,pagoDe);
-  let t = `Olá, ${nome}! Segue o resumo dos seus pedidos (${rotuloPeriodo()}):\n` +
-    agrupa(itensDe(base)).map(l=>`• ${l.qtd}× ${l.nome}: ${brl(l.total)}`).join("\n") + `\nTotal: ${brl(total)}`;
-  if(pago>0.004 && total-pago>0.004) t += `\nJá pago: ${brl(pago)}\nFalta: ${brl(total-pago)}`;
-  return t;
+const mesLongo = mes => { const [a,m]=mes.split("-"), n=MESES[+m-1]; return `${n[0].toUpperCase()+n.slice(1)} de ${a}`; };
+const mesCurto = mes => { const [a,m]=mes.split("-"); return `${MESES[+m-1].slice(0,3)}/${a}`; };
+function limitesPeriodo(){
+  if(periodo==="dia"){ const d=$("#rDia").value; return [d,d]; }
+  if(periodo==="mes"){ const m=$("#rMes").value; return [m+"-01", m+"-31"]; }
+  const a=$("#rAno").value; return [a+"-01-01", a+"-12-31"];
 }
-/* Pagamentos ficam dentro dos pedidos que eles quitaram; aqui são reunidos por pagamento */
-function pagamentosDe(peds){
+const ROTULO_ANTERIOR = {dia:"antes deste dia", mes:"mês anterior", ano:"ano anterior"};
+
+/* Marcas de busca: em que dias, meses e anos o pedido recebeu pagamento */
+function marcasPagto(pags){
+  const dias=[...new Set(pags.map(e=>e.dia).filter(Boolean))];
+  return { pagtoDias:dias, pagtoMeses:[...new Set(dias.map(d=>d.slice(0,7)))], pagtoAnos:[...new Set(dias.map(d=>+d.slice(0,4)))] };
+}
+/* Pedido antigo marcado só como "pago" vira um pagamento com data; e todo pedido ganha as marcas de busca */
+function normalizaPagamentos(p){
+  const mud={};
+  let pags=p.pagamentos||[];
+  if(!pags.length && p.pago){ pags=[{id:"antigo-"+p.id, valor:p.total, dia:p.pagoEm||p.dia, ts:0, por:""}]; mud.pagamentos=pags; mud.valorPago=p.total; }
+  return Object.assign(mud, marcasPagto(pags));
+}
+/* Todos os pedidos carregados (do período, em aberto e com pagamento no período), sem repetir */
+function todosPedidos(){ const m=new Map(); [...D.pedidos, ...D.abertos, ...D.pagosPeriodo].forEach(p=>m.set(p.id,p)); return [...m.values()]; }
+
+/* Pagamentos ficam dentro dos pedidos que eles quitaram; aqui são reunidos por pagamento.
+   "filtro" escolhe pela data do pagamento (ex.: só os do período). */
+function pagamentosDe(peds, filtro=()=>true){
   const g={};
   peds.forEach(p=>{
-    (p.pagamentos||[]).forEach(e=>{ const x = g[e.id] ||= {id:e.id, dia:e.dia, ts:e.ts||0, valor:0, partes:[]}; x.valor=centavos(x.valor+e.valor); x.partes.push({pedidoId:p.id, e}); });
-    if(p.pago && p.valorPago==null){ const x = g.antigo ||= {id:"antigo", dia:p.pagoEm, ts:0, valor:0, partes:[], antigo:true}; x.valor=centavos(x.valor+p.total); x.partes.push({pedidoId:p.id}); }
+    (p.pagamentos||[]).forEach(e=>{
+      if(!filtro(e.dia)) return;
+      const x = g[e.id] ||= {id:e.id, dia:e.dia, ts:e.ts||0, valor:0, partes:[], meses:new Set(), clienteId:p.clienteId};
+      x.valor=centavos(x.valor+e.valor); x.partes.push({pedidoId:p.id, e}); x.meses.add(p.mes);
+    });
+    if(p.pago && p.valorPago==null && filtro(p.pagoEm||p.dia)){
+      const k="antigo-"+p.clienteId;
+      const x = g[k] ||= {id:k, dia:p.pagoEm||p.dia, ts:0, valor:0, partes:[], meses:new Set(), clienteId:p.clienteId, antigo:true};
+      x.valor=centavos(x.valor+p.total); x.partes.push({pedidoId:p.id}); x.meses.add(p.mes);
+    }
   });
   return Object.values(g).sort((a,b)=>b.ts-a.ts); // mais recente primeiro
 }
-/* Distribui o valor recebido pelos pedidos em aberto do período, do mais antigo para o mais novo */
+/* Distribui o valor recebido por tudo o que o cliente deve, do pedido mais antigo para o mais novo */
+const abertosDoCliente = id => todosPedidos().filter(p=>p.clienteId===id && abertoDe(p)>0.004).sort((a,b)=>a.ts-b.ts);
 function registrarPagamento(clienteId, valor){
-  const peds = D.pedidos.filter(p=>p.clienteId===clienteId && abertoDe(p)>0.004).sort((a,b)=>a.ts-b.ts);
   const ts = Date.now(), id = ts.toString(36)+Math.random().toString(36).slice(2,6), dia = hojeStr(), b = db.batch();
   const FV = firebase.firestore.FieldValue;
   let resta = centavos(valor);
-  for(const p of peds){
+  for(const p of abertosDoCliente(clienteId)){
     if(resta<=0.004) break;
     const parte = centavos(Math.min(resta, abertoDe(p))), novoPago = centavos(pagoDe(p)+parte);
     const quitou = novoPago >= p.total-0.004;
     b.update(db.doc("pedidos/"+p.id), {
       valorPago: p.valorPago==null ? novoPago : inc(parte),
       pagamentos: FV.arrayUnion({id, valor:parte, dia, ts, por:usuario.email}),
+      pagtoDias: FV.arrayUnion(dia), pagtoMeses: FV.arrayUnion(dia.slice(0,7)), pagtoAnos: FV.arrayUnion(+dia.slice(0,4)),
       pago: quitou, pagoEm: quitou ? dia : null });
     resta = centavos(resta-parte);
   }
   gravar(b.commit());
 }
 function desfazerPagamento(pg){
-  const b=db.batch(), FV=firebase.firestore.FieldValue;
+  const b=db.batch(), FV=firebase.firestore.FieldValue, todos=todosPedidos();
   pg.partes.forEach(({pedidoId,e})=>{
     const ref=db.doc("pedidos/"+pedidoId);
-    if(pg.antigo) b.update(ref, {pago:false, pagoEm:null, valorPago:0});
-    else b.update(ref, {valorPago:inc(-e.valor), pagamentos:FV.arrayRemove(e), pago:false, pagoEm:null});
+    if(pg.antigo){ b.update(ref, {pago:false, pagoEm:null, valorPago:0, pagamentos:[], ...marcasPagto([])}); return; }
+    const resto=(todos.find(p=>p.id===pedidoId)?.pagamentos||[]).filter(x=>x.id!==e.id);
+    b.update(ref, {valorPago:inc(-e.valor), pagamentos:FV.arrayRemove(e), ...marcasPagto(resto), pago:false, pagoEm:null});
   });
   gravar(b.commit());
 }
-/* Janela de pagamento: vem com o total em aberto; dá para trocar por um valor menor (parcial) */
+
+/* A cobrança lista tudo o que está em aberto, mês a mês, marcando o que é de meses anteriores */
+function textoCobranca(nome, clienteId){
+  const abertos = abertosDoCliente(clienteId);
+  if(!abertos.length) return `Olá, ${nome}! Não há nada em aberto. Obrigado!`;
+  const mesAtual = hojeStr().slice(0,7), porMes = {};
+  abertos.forEach(p=>(porMes[p.mes] ||= []).push(p));
+  let t = `Olá, ${nome}! Segue o resumo do que está em aberto:\n`;
+  Object.keys(porMes).sort().forEach(mes=>{
+    const peds=porMes[mes], pago=soma(peds,pagoDe);
+    t += `\n${mesLongo(mes)}${mes<mesAtual?" (mês anterior)":""}:\n` +
+      agrupa(itensDe(peds)).map(l=>`• ${l.qtd}× ${l.nome}: ${brl(l.total)}`).join("\n");
+    if(pago>0.004) t += `\nJá pago: ${brl(pago)} · falta ${brl(soma(peds,abertoDe))}`;
+    t += "\n";
+  });
+  return t + `\nTotal em aberto: ${brl(soma(abertos,abertoDe))}`;
+}
+
+/* Janela de pagamento: vem com tudo o que o cliente deve; dá para trocar por um valor menor (parcial) */
 let pagtoCli=null;
-const abertoCliente = id => centavos(soma(D.pedidos.filter(p=>p.clienteId===id), abertoDe));
+const abertoCliente = id => centavos(soma(abertosDoCliente(id), abertoDe));
 function abrirPagto(id){
   pagtoCli=id;
-  const ab=abertoCliente(id);
-  $("#gCliente").textContent = cliente(id)?.nome || D.pedidos.find(p=>p.clienteId===id)?.clienteNome || "";
-  $("#gPeriodo").textContent = `Em aberto (${rotuloPeriodo()})`;
-  $("#gAberto").textContent = brl(ab);
-  $("#gValor").value = fmtValor(ab);
+  const mesAtual=hojeStr().slice(0,7), ant=centavos(soma(abertosDoCliente(id).filter(p=>p.mes<mesAtual), abertoDe));
+  $("#gCliente").textContent = cliente(id)?.nome || todosPedidos().find(p=>p.clienteId===id)?.clienteNome || "";
+  $("#gPeriodo").textContent = ant>0.004 ? `Em aberto (inclui ${brl(ant)} de meses anteriores)` : "Em aberto";
+  $("#gValor").value = fmtValor(abertoCliente(id));
   atualizaPagto();
   $("#modalPagto").hidden=false;
 }
@@ -887,7 +972,7 @@ function atualizaPagto(){
   let msg, ok=false;
   if(!(v>0)) msg="Digite o valor recebido.";
   else if(v>ab+0.004) msg=`Esse valor passa do que está em aberto (${brl(ab)}).`;
-  else { ok=true; msg = ab-v<=0.004 ? "Quita tudo o que está em aberto." : `Pagamento parcial: fica faltando ${brl(ab-v)}.`; }
+  else { ok=true; msg = ab-v<=0.004 ? "Quita tudo o que está em aberto." : `Pagamento parcial: fica faltando ${brl(ab-v)}. Abate primeiro o mais antigo.`; }
   $("#gAberto").textContent = brl(ab);
   $("#gInfo").textContent=msg; $("#gConfirmar").disabled=!ok;
 }
@@ -900,8 +985,22 @@ $("#gConfirmar").onclick=()=>{
   if(!(v>0) || v>ab+0.004) return;
   const nome=$("#gCliente").textContent;
   registrarPagamento(id, v); fecharPagto();
-  toast(ab-v<=0.004 ? `${nome}: pago` : `${nome}: recebido ${brl(v)}, falta ${brl(ab-v)}`);
+  toast(ab-v<=0.004 ? `${nome}: tudo pago` : `${nome}: recebido ${brl(v)}, falta ${brl(ab-v)}`);
 };
+
+/* Visão da lista de clientes: Total (comprou), Quitado (pagou) ou Em aberto (deve) */
+let visaoCli = "aberto";
+try{ visaoCli = localStorage.getItem("visaoCli") || visaoCli; }catch{}
+const DICA_VISAO = {
+  total:"O que cada cliente comprou neste período.",
+  quitado:"O que cada cliente pagou neste período, inclusive dívidas de meses anteriores.",
+  aberto:"O que falta receber, inclusive o que ficou de meses anteriores.",
+};
+document.querySelectorAll("#visaoSeg button").forEach(b=>b.onclick=()=>{
+  visaoCli=b.dataset.v; try{ localStorage.setItem("visaoCli",visaoCli); }catch{}
+  renderRelatorio();
+});
+
 const cliAbertos = new Set(); // clientes expandidos no relatório
 const custoDe = v => v.custoTotal ?? centavos((produto(v.produtoId)?.custo||0)*v.qtd);
 
@@ -910,49 +1009,82 @@ function agrupa(vs){
   vs.forEach(v=>{ const it = itens[v.produtoId] ||= {nome:v.produtoNome, qtd:0, total:0}; it.qtd+=v.qtd; it.total+=v.total; });
   return Object.values(itens).sort((a,b)=>b.qtd-a.qtd);
 }
+const linhasItens = peds => agrupa(itensDe(peds)).map(l=>`<div class="ln"><span>${l.qtd}× ${esc(l.nome)}</span><span class="num">${brl(l.total)}</span></div>`).join("");
+
 function renderRelatorio(){
+  document.querySelectorAll("#visaoSeg button").forEach(x=>x.setAttribute("aria-pressed", x.dataset.v===visaoCli));
+  $("#visaoDica").textContent = DICA_VISAO[visaoCli];
   if(!pedidosCarregados){
     $("#rResumo").textContent = usuario ? "Carregando…" : "—";
     $("#rFin").innerHTML=""; $("#rClientes").innerHTML=""; $("#rRank").innerHTML=""; $("#rPedidos").innerHTML="";
     return;
   }
-  const vs = itensDe(D.pedidos);
-  const vendido = soma(D.pedidos,p=>p.total), receita = soma(D.pedidos,pagoDe);
-  const despesas = soma(vs,custoDe), lucro = receita - despesas;
+  const [ini,fim] = limitesPeriodo(), noPeriodo = d => !!d && d>=ini && d<=fim;
+  const todos = todosPedidos(), vs = itensDe(D.pedidos);
+  const pgtosPeriodo = pagamentosDe(todos, noPeriodo);
+  const abertosAte = todos.filter(p=>p.dia<=fim && abertoDe(p)>0.004);
+  const vendido = soma(D.pedidos,p=>p.total), recebido = soma(pgtosPeriodo,g=>g.valor);
+  const aReceber = soma(abertosAte,abertoDe), anterior = soma(abertosAte.filter(p=>p.dia<ini),abertoDe);
+  const despesas = soma(vs,custoDe), lucro = recebido - despesas;
   const itens = soma(vs,v=>v.qtd), nPed = D.pedidos.length;
   $("#rResumo").textContent = `${rotuloPeriodo()} · ${nPed} pedido${nPed===1?"":"s"} · ${itens} ite${itens===1?"m":"ns"}`;
   $("#rFin").innerHTML = `
-    <div><span>Receita</span><b>${brl(receita)}</b><small>já recebido</small></div>
+    <div><span>Receita</span><b>${brl(recebido)}</b><small>recebido no período</small></div>
     <div><span>Despesas</span><b>${brl(despesas)}</b><small>custo do que vendeu</small></div>
-    <div><span>Vendido</span><b>${brl(vendido)}</b><small>pago + em aberto</small></div>
-    <div><span>A receber</span><b>${brl(vendido-receita)}</b><small>ainda não pago</small></div>
+    <div><span>Vendido</span><b>${brl(vendido)}</b><small>pedidos do período</small></div>
+    <div><span>A receber</span><b>${brl(aReceber)}</b><small>${anterior>0.004?`inclui ${brl(anterior)} de antes`:"ainda não pago"}</small></div>
     <div class="lucro ${lucro<0?"neg":""}"><span>Lucro</span><b>${brl(lucro)}</b></div>`;
 
-  const porCli = {};
-  D.pedidos.forEach(p=>{ (porCli[p.clienteId] ||= {nome:p.clienteNome, pedidos:[]}).pedidos.push(p); });
-  const clis = Object.entries(porCli).map(([id,c])=>{
-    c.id=id; c.vendas=itensDe(c.pedidos); c.total=soma(c.pedidos,p=>p.total); c.pago=soma(c.pedidos,pagoDe);
-    c.aberto=centavos(c.total-c.pago); c.pgtos=pagamentosDe(c.pedidos); return c;
-  }).sort((a,b)=>b.aberto-a.aberto || b.total-a.total);
+  // Um registro por cliente que comprou, pagou ou deve
+  const porCli={};
+  const de = id => porCli[id] ||= {id, pedidos:[], abertos:[], pgtos:[]};
+  D.pedidos.forEach(p=>de(p.clienteId).pedidos.push(p));
+  abertosAte.forEach(p=>de(p.clienteId).abertos.push(p));
+  pgtosPeriodo.forEach(g=>de(g.clienteId).pgtos.push(g));
+  const clis = Object.values(porCli).map(c=>{
+    const qualquer = c.pedidos[0]||c.abertos[0]||todos.find(p=>p.clienteId===c.id);
+    c.nome = cliente(c.id)?.nome || qualquer?.clienteNome || "Cliente";
+    c.gasto = soma(c.pedidos,p=>p.total); c.quitado = soma(c.pgtos,g=>g.valor);
+    c.aberto = centavos(soma(c.abertos,abertoDe)); c.anterior = centavos(soma(c.abertos.filter(p=>p.dia<ini),abertoDe));
+    c.abertoPeriodo = centavos(soma(c.pedidos,abertoDe));
+    c.valor = visaoCli==="total" ? c.gasto : visaoCli==="quitado" ? c.quitado : c.aberto;
+    return c;
+  }).filter(c=>c.valor>0.004).sort((a,b)=>b.valor-a.valor);
+
+  const vazio = {total:"Nenhuma venda neste período.", quitado:"Nenhum pagamento recebido neste período.", aberto:"Ninguém devendo. Tudo pago!"};
   const rc=$("#rClientes");
-  rc.innerHTML = !clis.length ? `<div class="empty">Nenhuma venda neste período.</div>` : clis.map(c=>{
+  rc.innerHTML = !clis.length ? `<div class="empty">${vazio[visaoCli]}</div>` : clis.map(c=>{
     const tem = (cliente(c.id)?.telefone||"").replace(/\D/g,"");
-    const status = c.aberto<=0.004 ? `<span class="chip ok">Pago</span>`
-      : c.pago>0 ? `<span class="chip warn">Falta ${brl(c.aberto)}</span>` : `<span class="chip warn">Em aberto</span>`;
-    return `<details class="cli" data-cid="${c.id}" ${cliAbertos.has(c.id)?"open":""}><summary><span class="n">${esc(c.nome)}</span>${status}<span class="num money">${brl(c.total)}</span></summary>
-      <div class="lines">${agrupa(c.vendas).map(l=>`<div class="ln"><span>${l.qtd}× ${esc(l.nome)}</span><span class="num">${brl(l.total)}</span></div>`).join("")}
-      ${c.pgtos.length ? `<div class="ln"><span><b>Pagamentos</b></span></div>` + c.pgtos.map(pg=>`<div class="ln pg">
-          <span>${pg.antigo ? "Marcado como pago" : dataBR(pg.dia)} · <b class="num">${brl(pg.valor)}</b></span>
-          <button class="btn danger small" data-desf="${c.id}" data-pg="${pg.id}">Desfazer</button></div>`).join("") : ""}
-      ${c.pago>0.004 && c.aberto>0.004 ? `<div class="ln"><span>Falta pagar</span><b class="num">${brl(c.aberto)}</b></div>` : ""}
+    let chip="", corpo="";
+    if(visaoCli==="total"){
+      chip = c.abertoPeriodo<=0.004 ? `<span class="chip ok">Pago</span>`
+        : c.abertoPeriodo<c.gasto-0.004 ? `<span class="chip warn">Falta ${brl(c.abertoPeriodo)}</span>` : `<span class="chip warn">Em aberto</span>`;
+      corpo = linhasItens(c.pedidos);
+    } else if(visaoCli==="quitado"){
+      chip = c.aberto>0.004 ? `<span class="chip warn">Deve ${brl(c.aberto)}</span>` : `<span class="chip ok">Em dia</span>`;
+      corpo = c.pgtos.map(pg=>`<div class="ln pg">
+          <span>${dataBR(pg.dia)} · <b class="num">${brl(pg.valor)}</b><br><small class="hint">ref. ${[...pg.meses].sort().map(mesCurto).join(", ")}</small></span>
+          <button class="btn danger small" data-desf="${c.id}" data-pg="${pg.id}">Desfazer</button></div>`).join("");
+    } else {
+      chip = c.anterior>0.004 ? `<span class="chip bad">${ROTULO_ANTERIOR[periodo]}</span>` : "";
+      const porMes={}; c.abertos.forEach(p=>(porMes[p.mes] ||= []).push(p));
+      corpo = Object.keys(porMes).sort().map(mes=>{
+        const peds=porMes[mes], antes=peds.some(p=>p.dia<ini), pago=soma(peds,pagoDe);
+        return `<div class="ln mes"><b>${mesLongo(mes)}</b>${antes?`<span class="chip bad">${ROTULO_ANTERIOR[periodo]}</span>`:""}</div>
+          ${linhasItens(peds)}
+          ${pago>0.004?`<div class="ln"><span>Já pago</span><span class="num">− ${brl(pago)}</span></div>`:""}
+          <div class="ln"><span>Falta deste mês</span><b class="num">${brl(soma(peds,abertoDe))}</b></div>`;
+      }).join("");
+    }
+    return `<details class="cli" data-cid="${c.id}" ${cliAbertos.has(c.id)?"open":""}><summary><span class="n">${esc(c.nome)}</span>${chip}<span class="num money">${brl(c.valor)}</span></summary>
+      <div class="lines">${corpo}
       <div class="actions">
-        ${c.aberto>0.004
-          ? `<button class="btn small" data-pagar="${c.id}">Marcar como pago</button>${tem?`<button class="btn ghost small" data-wa="${c.id}">Cobrar no WhatsApp</button>`:""}` : ""}
+        ${c.aberto>0.004 ? `<button class="btn small" data-pagar="${c.id}">Marcar como pago</button>${tem?`<button class="btn ghost small" data-wa="${c.id}">Cobrar no WhatsApp</button>`:""}` : ""}
         <button class="btn ghost small" data-share="${c.id}">Compartilhar</button></div></div></details>`;
   }).join("");
   rc.querySelectorAll("details").forEach(d=>d.addEventListener("toggle",()=>{ d.open ? cliAbertos.add(d.dataset.cid) : cliAbertos.delete(d.dataset.cid); }));
   const cli = id => clis.find(c=>c.id===id);
-  const txtDe = id => { const c=cli(id); return textoCobranca(c.nome, c.pedidos); };
+  const txtDe = id => textoCobranca(cli(id).nome, id);
   rc.querySelectorAll("[data-pagar]").forEach(b=>b.onclick=()=>abrirPagto(b.dataset.pagar));
   rc.querySelectorAll("[data-desf]").forEach(b=>b.onclick=()=>armar(b,()=>{
     const pg=cli(b.dataset.desf).pgtos.find(x=>x.id===b.dataset.pg); if(!pg) return;
@@ -1123,7 +1255,7 @@ async function importar(dados, aviso){
   dados.produtos.forEach(x=>ops.push(["produtos",x.id,{nome:x.nome, preco:x.preco||0, custo:x.custo||0, estoque:x.estoque||0, foto:x.foto||""}]));
   dados.clientes.forEach(x=>ops.push(["clientes",x.id,{nome:x.nome, telefone:x.telefone||""}]));
   dados.entradas.forEach(x=>ops.push(["entradas",x.id,sem(x)]));
-  dados.pedidos.forEach(x=>ops.push(["pedidos",x.id,sem(x)]));
+  dados.pedidos.forEach(x=>{ const d=sem(x); ops.push(["pedidos",x.id, d.pagtoMeses ? d : {...d, ...normalizaPagamentos(d)}]); });
   let b=db.batch(), n=0, peso=0, feitos=0;
   for(const [col,id,dado] of ops){
     b.set(db.collection(col).doc(String(id)), dado);
